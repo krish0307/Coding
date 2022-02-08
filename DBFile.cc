@@ -6,93 +6,101 @@
 #include "ComparisonEngine.h"
 #include "DBFile.h"
 #include "Defs.h"
-#include <stdlib.h>
-#include <iostream>
-// stub file .. replace it with your own DBFile.cc
+#include "iostream"
+using namespace std;
 
 DBFile::DBFile () {
-    this->f = new File();
-    this->present_page = new Page(); 
+    curRec = new Record();
+    endOfFile = 0;
+    pageIndex = 0;
+    additionalPage = 0;
 }
 
-DBFile::~DBFile () {
-    delete f;
-    delete present_page;
-}
-
+//This method is used in creating the binary files.
 int DBFile::Create (const char *f_path, fType f_type, void *startup) {
-    this->f->Open(0, (char *) f_path);
+    if(f_type==heap){
+    file.Open(0,(char *) f_path);
     return 1;
-
-}
-
-void DBFile::Load (Schema &f_schema, const char *loadpath) {
-    FILE *schemaFile = fopen((char*) loadpath, "r");
-    int counter_pages=0;
-
-    if(schemaFile){
-        Record r;
-        Page current_page;
-    
-        while(r.SuckNextRecord(&f_schema, schemaFile)==1){
-            int succ = current_page.Append(&r);
-            if(succ==0){
-                this->f->AddPage(&current_page, counter_pages++);
-                current_page.EmptyItOut();
-                current_page.Append(&r);
-            }
-        }
-        this->f->AddPage(&current_page, counter_pages);
     }
     else{
-        cout << "Error couldnt load the schema file %s", loadpath;
+        return 0;
     }
-    fclose(schemaFile);
 }
 
+//Used to load DBFile instance from a txt file.
+void DBFile::Load (Schema &f_schema, const char *loadpath) {
+    FILE* fileToLoad = fopen (loadpath,"r");
+    while(curRec->SuckNextRecord(&f_schema,fileToLoad)!=0){
+        Add(*curRec);
+    }
+    if(additionalPage==1){
+        file.AddPage(&bufPage,pageIndex);
+        pageIndex++;
+        bufPage.EmptyItOut();
+        additionalPage=0;
+    }
+    fclose(fileToLoad);
+}
+
+//Used to open a existing bin file
 int DBFile::Open (const char *f_path) {
-    this->f->Open(1, const_cast<char *> (f_path) );
+    file.Open(1,(char *) f_path);
+    pageIndex=0;
+    endOfFile=0;
     return 1;
 }
 
 void DBFile::MoveFirst () {
-    this->f->GetPage(this->present_page, 0);
+    file.GetPage(&bufPage,0);
 }
 
-
-int DBFile::Close () { 
-    return this->f->Close();
+//Used to close the dbfile
+int DBFile::Close () {
+    endOfFile=1;
+    file.Close();
+    return 1;
 }
 
+//This method adds the record to the end of the file
 void DBFile::Add (Record &rec) {
-    if(this->present_page->Append(&rec)==0){
-        this->f->AddPage(this->present_page, this->present_page_index);
-        this->present_page_index++;
-        this->present_page->EmptyItOut();
-        this->present_page->Append(&rec);
+    additionalPage=1;
+    if(bufPage.Append(&rec)==0){
+        file.AddPage(&bufPage,pageIndex);
+        pageIndex++;
+        bufPage.EmptyItOut();
+        bufPage.Append(&rec);
     }
 }
 
+//This method gets the next record in the file
 int DBFile::GetNext (Record &fetchme) {
-    int resp_get = this->present_page->GetFirst(&fetchme);
-    if(resp_get==0){
-        if(++this->present_page_index < this->f->GetLength() - 1){
-            this->f->GetPage(this->present_page, this->present_page_index );
-            return this->present_page->GetFirst(&fetchme);
-        }
-        else{
+    if(bufPage.GetFirst(&fetchme)==0){
+        pageIndex++;
+        if(pageIndex>=file.GetLength()-1){
+            endOfFile=1;
             return 0;
         }
+        else{
+            file.GetPage(&bufPage,pageIndex);
+            bufPage.GetFirst(&fetchme);
+            return 1;
+        }        
     }
-    
-    
-    return resp_get;
+    else{
+        return 1;
+    }
 }
 
+//This method takes a CNF parameter based on which the next record in the file is selected
 int DBFile::GetNext (Record &fetchme, CNF &cnf, Record &literal) {
-    ComparisonEngine comp_eng;
-    while(GetNext(fetchme)!=0){
-        if(comp_eng.Compare(&fetchme, &literal, &cnf))return 1;
+    ComparisonEngine engine;
+    if(GetNext(fetchme)==0){
+        return 0;
     }
-    return 0;
+    while(engine.Compare(&fetchme,&literal,&cnf)==0){
+        if(GetNext(fetchme)==0){
+        return 0;
+    }
+    }
+    return 1;
 }
